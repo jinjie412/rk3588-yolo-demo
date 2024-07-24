@@ -1,8 +1,8 @@
-//
-// Created by kaylor on 3/9/24.
-//
 #include <cctype>  // 用于检查字符是否为数字
 #include <cerrno>  // 用于检查 strtol 和 strtod 的错误
+#include <iomanip> // For std::put_time
+#include <sstream> // For std::stringstream
+#include <memory>  // For std::unique_ptr and std::shared_ptr
 
 #include "camera.h"
 #include "getopt.h"
@@ -10,12 +10,13 @@
 #include "kaylordut/time/time_duration.h"
 #include "kaylordut/time/timeout.h"
 #include "rknn_pool.h"
+#include "image_process.h" // Assuming this is the correct include for ImageProcess
 
 struct ProgramOptions {
   std::string model_path;
   std::string label_path;
   int thread_count;
-  int camera_index;
+  std::string rtsp_url;  // Updated to use rtsp_url
   int width;
   int height;
   double fps;
@@ -37,7 +38,7 @@ bool parseCommandLine(int argc, char *argv[], ProgramOptions &options) {
       {"model_path", required_argument, nullptr, 'm'},
       {"label_path", required_argument, nullptr, 'l'},
       {"threads", required_argument, nullptr, 't'},
-      {"camera_index", required_argument, nullptr, 'i'},
+      {"rtsp_url", required_argument, nullptr, 'u'},  // Updated to use rtsp_url
       {"width", required_argument, nullptr, 'w'},
       {"height", required_argument, nullptr, 'h'},
       {"fps", required_argument, nullptr, 'f'},
@@ -46,8 +47,7 @@ bool parseCommandLine(int argc, char *argv[], ProgramOptions &options) {
       {nullptr, 0, nullptr, 0}};
 
   int c, optionIndex = 0;
-  while ((c = getopt_long(argc, argv, "m:l:t:i:w:h:f:?T", longOpts,
-                          &optionIndex)) != -1) {
+  while ((c = getopt_long(argc, argv, "m:l:t:u:w:h:f:?T", longOpts, &optionIndex)) != -1) {
     switch (c) {
       case 'm':
         options.model_path = optarg;
@@ -67,17 +67,8 @@ bool parseCommandLine(int argc, char *argv[], ProgramOptions &options) {
           return false;
         }
         break;
-      case 'i':
-        if (isNumber(optarg)) {
-          options.camera_index = std::atoi(optarg);
-          if (options.camera_index < 0) {
-            KAYLORDUT_LOG_ERROR("Invalid index of camera: {}", optarg);
-            return false;
-          }
-        } else {
-          KAYLORDUT_LOG_ERROR("Camera index must be a number: {}", optarg);
-          return false;
-        }
+      case 'u':  // Updated to use rtsp_url
+        options.rtsp_url = optarg;
         break;
       case 'w':
         if (isNumber(optarg)) {
@@ -120,15 +111,15 @@ bool parseCommandLine(int argc, char *argv[], ProgramOptions &options) {
         break;
       case '?':
         std::cout << "Usage: " << argv[0]
-                  << " [--model_path|-m model_path] [--camera_index|-i index] "
-                     "[--width|-w width] [--height|-h height]"
+                  << " [--model_path|-m model_path] [--rtsp_url|-u url] "
+                     "[--width|-w width] [--height|-h height] "
                      "[--threads|-t thread_count] [--fps|-f framerate] "
                      "[--label_path|-l label_path]\n";
         exit(EXIT_SUCCESS);
       default:
         std::cout << "Usage: " << argv[0]
-                  << " [--model_path|-m model_path] [--camera_index|-i index] "
-                     "[--width|-w width] [--height|-h height]"
+                  << " [--model_path|-m model_path] [--rtsp_url|-u url] "
+                     "[--width|-w width] [--height|-h height] "
                      "[--threads|-t thread_count] [--fps|-f framerate] "
                      "[--label_path|-l label_path]\n";
         abort();
@@ -148,31 +139,26 @@ std::string getCurrentTimeStr() {
 }
 
 int main(int argc, char *argv[]) {
-  ProgramOptions options = {"", "", 0, 0, 0, 0, 0.0};
+  ProgramOptions options = {"", "", 0, "", 0, 0, 0.0};
   if (!parseCommandLine(argc, argv, options)) {
     KAYLORDUT_LOG_ERROR("Parse command failed.");
     return 1;
   }
   if (options.fps == 0.0 || options.thread_count == 0 || options.height == 0 ||
       options.width == 0 || options.label_path.empty() ||
-      options.model_path.empty()) {
+      options.model_path.empty() || options.rtsp_url.empty()) {
     KAYLORDUT_LOG_ERROR("Missing required options. Use --help for help.");
     return 1;
   }
+
   auto rknn_pool = std::make_unique<RknnPool>(
       options.model_path, options.thread_count, options.label_path);
   auto camera = std::make_unique<Camera>(
-      options.camera_index, cv::Size(options.width, options.height),
-      options.fps);
+      options.rtsp_url, cv::Size(options.width, options.height), options.fps);
+
   ImageProcess image_process(options.width, options.height, 640,
                              options.is_track, options.fps);
-  //  cv::VideoWriter video_writer(
-  //      getCurrentTimeStr() + ".mkv", cv::VideoWriter::fourcc('X', '2', '6',
-  //      '4'), options.fps, cv::Size(options.width, options.height), true);
-  //  if (!video_writer.isOpened()) {
-  //    KAYLORDUT_LOG_ERROR("Open the output video file error");
-  //    return -1;
-  //  }
+
   std::unique_ptr<cv::Mat> image;
   std::shared_ptr<cv::Mat> image_res;
   cv::namedWindow("Video", cv::WINDOW_AUTOSIZE);
@@ -201,12 +187,12 @@ int main(int argc, char *argv[]) {
             image_count, image_res_count, image_count - image_res_count,
             duration.count());
         cv::imshow("Video", *image_res);
-        //        video_writer.write(*image_res);
         cv::waitKey(1);
       }
     };
     func();
   }
+
   auto duration_total_time =
       std::chrono::duration_cast<std::chrono::milliseconds>(
           total_time.DurationSinceLastTime());
@@ -214,7 +200,7 @@ int main(int argc, char *argv[]) {
       "Process {} frames, total time is {}ms, average frame rate is {}",
       image_res_count, duration_total_time.count(),
       image_res_count * 1000.0 / duration_total_time.count());
-  //  video_writer.release();
+
   rknn_pool.reset();
   cv::destroyAllWindows();
   return 0;

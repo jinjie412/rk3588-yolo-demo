@@ -69,7 +69,7 @@ git clone https://github.com/kaylorchen/rk3588-yolo-demo.git
 cd rk3588-yolo-demo/src/yolov8
 mkdir build
 cd build
-cmake -DCMAKE_TOOLCHAIN_FILE=/path/to/toolchain-aarch64.cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ..
+cmake -DCMAKE_TOOLCHAIN_FILE=/home/q/kaylor/rk3588_dev_rootfs/toolchain-aarch64.cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON ..
 make 
 ```
 > /path/to/toolchain-aarch64.cmake is .cmake file absolute path
